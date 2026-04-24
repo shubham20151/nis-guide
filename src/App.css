@@ -1,0 +1,13 @@
+/* App.css — component-level extras */
+
+/* SVG diagrams auto-theme */
+[data-theme="light"] svg text { fill: inherit; }
+
+/* Highlight text in search results */
+mark { background: rgba(108,99,255,.25); color: var(--accent2); border-radius:2px; padding:0 2px; }
+
+/* Topic done checkmark animation */
+.topic-btn.done::after { animation: fadeUp .3s ease; }
+
+/* Exam tip pulse on first view */
+.block-examtip { animation: fadeUp .4s ease .1s both; }
