@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import "./App.css";
+import { differences } from "./differences.js";
 
 const units = [
   {
@@ -989,20 +990,97 @@ const quizBank = [
   { q: "What is SQL injection? Give an example.", a: "Inserting malicious SQL code in input fields. Example: username='admin' OR '1'='1' — makes the WHERE clause always TRUE, bypassing login. Prevention: Use prepared statements/parameterized queries.", unit: 5 },
 ];
 
+/* ─────────────────────────────────────────────
+   Collapsible Section wrapper
+───────────────────────────────────────────── */
+function Section({ title, color, children }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="block-section" style={{ borderColor: color }}>
+      <div className="block-section-header" onClick={() => setOpen(o => !o)}>
+        <div className="block-section-title" style={{ color }}>{title}</div>
+        <span className={`block-section-chevron${open ? ' open' : ''}`}>▼</span>
+      </div>
+      {open && <div className="block-section-body">{children}</div>}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   Render a content item
+───────────────────────────────────────────── */
+function RenderItem({ item, color }) {
+  if (item.type === 'heading') return (
+    <h2 className="block-heading" style={{ color, borderColor: color }}>{item.text}</h2>
+  );
+  if (item.type === 'para') return <p className="block-para">{item.text}</p>;
+  if (item.type === 'section') return (
+    <Section title={item.title} color={color}>
+      <div className="block-section-text">{item.text}</div>
+    </Section>
+  );
+  if (item.type === 'diagram') return (
+    <div className="block-diagram">
+      <div className="diagram-label">📊 Diagram</div>
+      <div className="diagram-body" dangerouslySetInnerHTML={{ __html: item.svg }} />
+    </div>
+  );
+  if (item.type === 'examtip') return (
+    <div className="block-examtip">
+      <span className="examtip-icon">💡</span>
+      <div>
+        <div className="examtip-label">EXAM TIP</div>
+        <div className="examtip-text">{item.text}</div>
+      </div>
+    </div>
+  );
+  if (item.type === 'trick') return (
+    <div className="block-trick">
+      <span className="trick-icon">🧠</span>
+      <div>
+        <div className="trick-label">MEMORY TRICK</div>
+        <div className="trick-text">{item.text}</div>
+      </div>
+    </div>
+  );
+  if (item.type === 'keypoint') return (
+    <div className="block-keypoint">{item.text}</div>
+  );
+  if (item.type === 'table') return (
+    <div className="block-table-wrap">
+      <table className="block-table">
+        <thead>
+          <tr>{item.headers.map((h, i) => <th key={i}>{h}</th>)}</tr>
+        </thead>
+        <tbody>
+          {item.rows.map((row, ri) => (
+            <tr key={ri}>{row.map((cell, ci) => <td key={ci}>{cell}</td>)}</tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+  return null;
+}
+
+/* ─────────────────────────────────────────────
+   MAIN APP
+───────────────────────────────────────────── */
 export default function NISDeepGuide() {
   const [selUnit, setSelUnit]   = useState(0);
   const [selTopic, setSelTopic] = useState(0);
   const [showQuiz, setShowQuiz] = useState(false);
+  const [showDiff, setShowDiff] = useState(false);
+  const [diffSearch, setDiffSearch] = useState('');
   const [qIdx, setQIdx]         = useState(0);
   const [showAns, setShowAns]   = useState(false);
   const [filter, setFilter]     = useState(0);
   const [dark, setDark]         = useState(() => localStorage.getItem('nis-dark') !== 'false');
   const [search, setSearch]     = useState('');
-  const [sideOpen, setSideOpen] = useState(false);
   const [score, setScore]       = useState({ c:0, w:0 });
   const [progress, setProgress] = useState(() => { try { return JSON.parse(localStorage.getItem('nis-prog')||'{}'); } catch { return {}; } });
-  const searchRef = useRef(null);
-  const contentRef = useRef(null);
+  const topicBarRef = useRef(null);
+  const contentRef  = useRef(null);
 
   // Apply theme
   useEffect(() => {
@@ -1010,7 +1088,7 @@ export default function NISDeepGuide() {
     localStorage.setItem('nis-dark', dark);
   }, [dark]);
 
-  // Mark topic as read
+  // Mark topic as read + scroll active tab into view
   useEffect(() => {
     if (!showQuiz) {
       const key = `${selUnit}-${selTopic}`;
@@ -1020,7 +1098,12 @@ export default function NISDeepGuide() {
         localStorage.setItem('nis-prog', JSON.stringify(np));
       }
     }
-    contentRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    const bar = topicBarRef.current;
+    if (bar) {
+      const active = bar.querySelector('.topic-tab.active');
+      if (active) active.scrollIntoView({ inline: 'center', behavior: 'smooth', block: 'nearest' });
+    }
   }, [selUnit, selTopic, showQuiz]);
 
   // Search
@@ -1044,234 +1127,279 @@ export default function NISDeepGuide() {
   const topic = unit.topics[selTopic];
   const filteredQ = filter === 0 ? quizBank : quizBank.filter(q => q.unit === filter);
 
-  const goto = (ui, ti) => { setSelUnit(ui); setSelTopic(ti); setShowQuiz(false); setSearch(''); setSideOpen(false); };
-  const prevTopic = () => { if (selTopic > 0) setSelTopic(s => s-1); else if (selUnit > 0) { setSelUnit(u => u-1); setSelTopic(units[selUnit-1].topics.length-1); } };
-  const nextTopic = () => { if (selTopic < unit.topics.length-1) setSelTopic(s => s+1); else if (selUnit < units.length-1) { setSelUnit(u => u+1); setSelTopic(0); } };
+  const filteredDiff = useMemo(() => {
+    const q = diffSearch.trim().toLowerCase();
+    if (!q) return differences;
+    return differences.filter(d =>
+      d.title.toLowerCase().includes(q) ||
+      d.unit.toLowerCase().includes(q) ||
+      d.rows.some(row => row.some(cell => cell.toLowerCase().includes(q)))
+    );
+  }, [diffSearch]);
 
-  const renderContent = (items) => items.map((item, i) => {
-    if (item.type === "heading") return (
-      <h2 key={i} className="block-heading" style={{ color: unit.color, borderColor: unit.color }}>{item.text}</h2>
-    );
-    if (item.type === "para") return (
-      <p key={i} className="block-para">{item.text}</p>
-    );
-    if (item.type === "section") return (
-      <div key={i} className="block-section" style={{ borderColor: unit.color }}>
-        <div className="block-section-title" style={{ color: unit.color }}>{item.title}</div>
-        <div className="block-section-text">{item.text}</div>
-      </div>
-    );
-    if (item.type === "diagram") return (
-      <div key={i} className="block-diagram">
-        <div dangerouslySetInnerHTML={{ __html: item.svg }} />
-      </div>
-    );
-    if (item.type === "examtip") return (
-      <div key={i} className="block-examtip">
-        <span className="block-examtip-icon">💡</span>
-        <div>
-          <div className="block-examtip-label">EXAM TIP</div>
-          <div className="block-examtip-text">{item.text}</div>
-        </div>
-      </div>
-    );
-    return null;
-  });
-
-  const Sidebar = () => (
-    <aside className={`sidebar${sideOpen ? ' open' : ''}`}>
-      <div className="sidebar-unit-header">{unit.emoji} {unit.title} — {unit.subtitle}</div>
-      {unit.topics.map((t, i) => {
-        const done = !!progress[`${selUnit}-${i}`];
-        return (
-          <button key={i}
-            className={`topic-btn${selTopic === i && !showQuiz ? ' active' : ''}${done ? ' done' : ''}`}
-            style={{ '--tab-color': unit.color }}
-            onClick={() => { setSelTopic(i); setShowQuiz(false); setSideOpen(false); }}>
-            {t.title}
-          </button>
-        );
-      })}
-      <div style={{ padding:'10px 16px 6px', fontSize:'.65rem', fontWeight:700, color:'var(--txt3)', letterSpacing:'.08em', marginTop:8 }}>ALL UNITS</div>
-      {units.map((u, i) => (
-        <div key={i} onClick={() => goto(i, 0)}
-          style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 16px', cursor:'pointer',
-            borderBottom:'1px solid var(--border)', background: i===selUnit?'var(--accentbg)':'transparent' }}>
-          <span style={{ fontSize:'.9rem' }}>{u.emoji}</span>
-          <span style={{ fontSize:'.75rem', color: i===selUnit ? unit.color : 'var(--txt2)', fontWeight: i===selUnit?600:400 }}>{u.title}</span>
-        </div>
-      ))}
-    </aside>
-  );
+  const goto = (ui, ti) => { setSelUnit(ui); setSelTopic(ti); setShowQuiz(false); setShowDiff(false); setSearch(''); };
+  const prevTopic = () => {
+    if (selTopic > 0) setSelTopic(s => s - 1);
+    else if (selUnit > 0) { setSelUnit(u => u - 1); setSelTopic(units[selUnit - 1].topics.length - 1); }
+  };
+  const nextTopic = () => {
+    if (selTopic < unit.topics.length - 1) setSelTopic(s => s + 1);
+    else if (selUnit < units.length - 1) { setSelUnit(u => u + 1); setSelTopic(0); }
+  };
+  const isFirst = selUnit === 0 && selTopic === 0;
+  const isLast  = selUnit === units.length - 1 && selTopic === unit.topics.length - 1;
 
   return (
-    <div className="app-shell">
-      {/* ── Topbar ── */}
-      <header className="topbar">
-        <button className="hamburger" onClick={() => setSideOpen(o => !o)}>☰</button>
-        <span className="topbar-logo">🛡️ NIS Guide</span>
+    <div style={{ minHeight: '100svh' }}>
 
-        <div className="topbar-search" style={{ position:'relative' }} ref={searchRef}>
-          <span className="search-icon">🔍</span>
+      {/* ── Row 1: Topbar ── */}
+      <header className="topbar">
+        <span className="topbar-logo">🛡️ NIS Guide</span>
+        <div className="topbar-search" style={{ position: 'relative' }}>
+          <span style={{ color: 'var(--txt3)', fontSize: '.9rem' }}>🔍</span>
           <input
-            value={search} onChange={e => setSearch(e.target.value)}
+            value={search}
+            onChange={e => setSearch(e.target.value)}
             placeholder="Search topics…"
-            onKeyDown={e => { if(e.key==='Escape') setSearch(''); }}
+            onKeyDown={e => { if (e.key === 'Escape') setSearch(''); }}
           />
           {searchResults && (
             <div className="search-results">
               {searchResults.length === 0
                 ? <div className="no-results">No results for "{search}"</div>
                 : searchResults.map((r, i) => (
-                  <div key={i} className="search-result-item" onClick={() => goto(r.ui, r.ti)}>
-                    <div className="search-result-unit">{r.u.emoji} {r.u.title}</div>
-                    <div className="search-result-title">{r.t.title}</div>
+                  <div key={i} className="search-item" onClick={() => goto(r.ui, r.ti)}>
+                    <div className="search-item-unit">{r.u.emoji} {r.u.title}</div>
+                    <div className="search-item-title">{r.t.title}</div>
                   </div>
                 ))
               }
             </div>
           )}
         </div>
-
         <div className="topbar-right">
-          <div className="progress-badge">
+          <div className="progress-pill">
             <span>Progress</span>
-            <div className="progress-bar-mini">
-              <div className="progress-bar-fill" style={{ width: `${donePct}%` }} />
-            </div>
-            <span style={{ fontWeight:700, color:'var(--accent)' }}>{donePct}%</span>
+            <div className="prog-bar"><div className="prog-fill" style={{ width: `${donePct}%` }} /></div>
+            <span style={{ fontWeight: 700, color: 'var(--accent)' }}>{donePct}%</span>
           </div>
-          <button className="icon-btn" onClick={() => setDark(d => !d)} title="Toggle Theme">
+          <button className="icon-btn" onClick={() => setDark(d => !d)} title="Toggle theme">
             {dark ? '☀️' : '🌙'}
           </button>
         </div>
       </header>
 
-      {/* ── Unit Tabs ── */}
-      <nav className="unit-tabs">
+      <nav className="unit-tabbar">
         {units.map((u, i) => (
-          <button key={i} className={`unit-tab${selUnit===i && !showQuiz?' active':''}`}
+          <button key={i}
+            className={`unit-tab${selUnit === i && !showQuiz && !showDiff ? ' active' : ''}`}
             style={{ '--tab-color': u.color }}
-            onClick={() => { setSelUnit(i); setSelTopic(0); setShowQuiz(false); }}>
+            onClick={() => { setSelUnit(i); setSelTopic(0); setShowQuiz(false); setShowDiff(false); }}>
             {u.emoji} {u.title}
           </button>
         ))}
-        <button className={`unit-tab${showQuiz?' active':''}`}
-          style={{ '--tab-color':'#ffa940' }}
-          onClick={() => setShowQuiz(true)}>
+        <button className={`unit-tab${showQuiz ? ' active' : ''}`}
+          style={{ '--tab-color': '#ffa940' }}
+          onClick={() => { setShowQuiz(true); setShowDiff(false); }}>
           🎯 Quiz
+        </button>
+        <button className={`unit-tab${showDiff ? ' active' : ''}`}
+          style={{ '--tab-color': '#00d4a7' }}
+          onClick={() => { setShowDiff(true); setShowQuiz(false); }}>
+          ⚖️ Differences
         </button>
       </nav>
 
-      {/* ── Sidebar overlay (mobile) ── */}
-      <div className={`sidebar-overlay${sideOpen?' open':''}`} onClick={() => setSideOpen(false)} />
+      {/* ── Row 3: Topic Tabs (per unit) — hidden during quiz/diff ── */}
+      {!showQuiz && !showDiff && (
+        <div className="topic-tabbar" ref={topicBarRef}>
+          {unit.topics.map((t, i) => {
+            const done = !!progress[`${selUnit}-${i}`];
+            const short = t.title.replace(/^\d+[\d.&\s—–-]+/,'').replace(/\s*[—–].*/,'').trim();
+            return (
+              <button key={i}
+                className={`topic-tab${selTopic === i ? ' active' : ''}${done ? ' done' : ''}`}
+                style={{ '--tab-color': unit.color }}
+                onClick={() => setSelTopic(i)}>
+                {done && selTopic !== i && <span className="tick">✓ </span>}
+                {short}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
-      {/* ── Body ── */}
-      <div className="body-layout">
-        <Sidebar />
-
-        <main className="content-area" ref={contentRef}>
-          {showQuiz ? (
-            /* ── Quiz Panel ── */
-            <div className="quiz-wrap anim-up">
-              <div className="quiz-card">
-                <div className="quiz-header">
-                  <h2>🎯 Exam Practice Quiz</h2>
-                  <p>Based on actual MSBTE model answer paper questions</p>
+      {/* ── Main Content ── */}
+      <main className={`content-wrap${showQuiz || showDiff ? ' no-topic-bar' : ''}`}>
+        {showDiff ? (
+          <div className="anim-up">
+            {/* Differences header */}
+            <div className="content-card" style={{ marginBottom: 20 }}>
+              <div className="card-header" style={{ background: 'linear-gradient(135deg,rgba(0,212,167,.12),rgba(0,212,167,.03))', borderBottom: '1px solid rgba(0,212,167,.25)' }}>
+                <div className="card-header-label">
+                  <span>⚖️</span>
+                  <span>Difference Between — All Key Comparisons</span>
+                  <span style={{ marginLeft:'auto', background:'rgba(0,212,167,.15)', color:'var(--green)', padding:'2px 10px', borderRadius:99, fontSize:'.68rem', fontWeight:700 }}>
+                    {filteredDiff.length} tables
+                  </span>
                 </div>
-
-                <div className="quiz-filters">
-                  {['All Units','Unit I','Unit II','Unit III','Unit IV','Unit V'].map((lbl, i) => (
-                    <button key={i} className={`quiz-filter-btn${filter===i?' active':''}`}
-                      onClick={() => { setFilter(i); setQIdx(0); setShowAns(false); }}>
-                      {lbl}
-                    </button>
-                  ))}
+                <h2 style={{ color:'var(--green)' }}>📊 Exam-Focused Difference Tables</h2>
+                <p style={{ fontSize:'.83rem', color:'var(--txt2)', marginTop:8 }}>All comparison tables from the syllabus — most asked in MSBTE exams</p>
+                {/* search */}
+                <div style={{ marginTop:12, display:'flex', alignItems:'center', gap:8, background:'var(--bg3)', border:'1px solid var(--border2)', borderRadius:99, padding:'0 14px', height:36, maxWidth:340 }}>
+                  <span style={{ color:'var(--txt3)' }}>🔍</span>
+                  <input value={diffSearch} onChange={e => setDiffSearch(e.target.value)}
+                    placeholder="Search differences…"
+                    style={{ flex:1, background:'none', border:'none', outline:'none', color:'var(--txt)', fontSize:'.86rem', fontFamily:'var(--font)' }} />
                 </div>
-
-                <div className="quiz-score">
-                  <span className="score-c">✅ Correct: {score.c}</span>
-                  <span className="score-w">❌ Wrong: {score.w}</span>
-                  <span className="score-t">Total: {score.c + score.w}</span>
-                  {(score.c+score.w) > 0 && (
-                    <span style={{ color:'var(--accent)', fontWeight:700 }}>
-                      {Math.round(score.c/(score.c+score.w)*100)}% accuracy
-                    </span>
-                  )}
-                  <button onClick={() => setScore({c:0,w:0})}
-                    style={{ marginLeft:'auto', fontSize:'.72rem', color:'var(--txt3)', background:'none', border:'none', cursor:'pointer' }}>
-                    Reset
-                  </button>
-                </div>
-
-                {filteredQ.length > 0 && (
-                  <div className="quiz-body">
-                    <div className="quiz-counter">Question {qIdx+1} of {filteredQ.length}</div>
-                    <div className="quiz-q">{filteredQ[qIdx].q}</div>
-
-                    {showAns && (
-                      <div className="quiz-answer anim-up">
-                        <div className="quiz-answer-label">✅ MODEL ANSWER</div>
-                        <div className="quiz-answer-text">{filteredQ[qIdx].a}</div>
-                      </div>
-                    )}
-
-                    <div className="quiz-btns">
-                      {!showAns ? (
-                        <button className="quiz-btn quiz-btn-show" onClick={() => setShowAns(true)}>
-                          Reveal Answer
-                        </button>
-                      ) : (
-                        <>
-                          <button className="quiz-btn quiz-btn-next"
-                            style={{ background:'var(--green)' }}
-                            onClick={() => { setScore(s=>({...s,c:s.c+1})); setQIdx(q=>(q+1)%filteredQ.length); setShowAns(false); }}>
-                            ✅ Got it
-                          </button>
-                          <button className="quiz-btn quiz-btn-next"
-                            style={{ background:'var(--red)' }}
-                            onClick={() => { setScore(s=>({...s,w:s.w+1})); setQIdx(q=>(q+1)%filteredQ.length); setShowAns(false); }}>
-                            ❌ Missed it
-                          </button>
-                        </>
-                      )}
-                      <button className="quiz-btn quiz-btn-rand"
-                        onClick={() => { setQIdx(Math.floor(Math.random()*filteredQ.length)); setShowAns(false); }}>
-                        🎲
-                      </button>
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
-          ) : (
-            /* ── Content Panel ── */
-            <div className="content-card anim-up">
-              <div className="content-header" style={{ background:`linear-gradient(135deg,${unit.color}22,${unit.color}08)`, borderBottom:`1px solid ${unit.color}33` }}>
-                <div className="content-header-label">{unit.emoji} {unit.title} · Topic {selTopic+1} of {unit.topics.length}</div>
+            {/* Filter pills */}
+            <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:16 }}>
+              {['All','Unit I','Unit II','Unit III','Unit IV','Unit V'].map((u,i) => (
+                <button key={i} onClick={() => setDiffSearch(i===0 ? '' : u)}
+                  style={{ padding:'5px 14px', borderRadius:99, fontSize:'.75rem', fontWeight:600,
+                    cursor:'pointer', border:'1px solid var(--border2)', fontFamily:'var(--font)',
+                    background: diffSearch===u||( i===0&&!diffSearch) ? 'var(--green)' : 'transparent',
+                    color: diffSearch===u||(i===0&&!diffSearch) ? '#001a14' : 'var(--txt2)' }}>
+                  {u}
+                </button>
+              ))}
+            </div>
+            {/* Tables */}
+            {filteredDiff.map(d => (
+              <div key={d.id} className="content-card" style={{ marginBottom:16 }}>
+                <div className="card-header" style={{ padding:'14px 22px 12px', borderBottom:'1px solid var(--border)' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                    <span style={{ fontSize:'1.2rem' }}>{d.emoji}</span>
+                    <div>
+                      <div style={{ fontSize:'.68rem', color:'var(--green)', fontWeight:700, letterSpacing:'.07em', textTransform:'uppercase', marginBottom:2 }}>{d.unit}</div>
+                      <div style={{ fontSize:'1rem', fontWeight:800, color:'var(--txt)' }}>{d.title}</div>
+                    </div>
+                  </div>
+                </div>
+                <div style={{ overflowX:'auto' }}>
+                  <table className="block-table" style={{ minWidth:500 }}>
+                    <thead>
+                      <tr>{d.headers.map((h,i) => <th key={i} style={{ background:'rgba(0,212,167,.08)', color:'var(--green)' }}>{h}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                      {d.rows.map((row, ri) => (
+                        <tr key={ri}>
+                          <td style={{ fontWeight:700, color:'var(--txt2)', background:'var(--bg3)' }}>{row[0]}</td>
+                          {row.slice(1).map((cell,ci) => <td key={ci}>{cell}</td>)}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+            {filteredDiff.length === 0 && (
+              <div style={{ textAlign:'center', padding:'60px 20px', color:'var(--txt3)' }}>
+                <div style={{ fontSize:'2rem', marginBottom:8 }}>🔍</div>
+                <div>No difference tables match "{diffSearch}"</div>
+              </div>
+            )}
+          </div>
+        ) : showQuiz ? (
+
+          <div className="quiz-wrap anim-up">
+            <div className="quiz-card">
+              <div className="quiz-header">
+                <h2>🎯 Exam Practice Quiz</h2>
+                <p>Based on actual MSBTE model answer paper questions</p>
+              </div>
+              <div className="quiz-filters">
+                {['All Units','Unit I','Unit II','Unit III','Unit IV','Unit V'].map((lbl, i) => (
+                  <button key={i} className={`qf-btn${filter === i ? ' active' : ''}`}
+                    onClick={() => { setFilter(i); setQIdx(0); setShowAns(false); }}>
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+              <div className="quiz-score">
+                <span className="sc" style={{ color: 'var(--green)' }}>✅ {score.c}</span>
+                <span className="sc" style={{ color: 'var(--red)' }}>❌ {score.w}</span>
+                <span style={{ color: 'var(--txt3)' }}>Total: {score.c + score.w}</span>
+                {(score.c + score.w) > 0 && (
+                  <span style={{ color: 'var(--accent)', fontWeight: 700 }}>
+                    {Math.round(score.c / (score.c + score.w) * 100)}% accuracy
+                  </span>
+                )}
+                <button onClick={() => setScore({ c: 0, w: 0 })}
+                  style={{ marginLeft: 'auto', fontSize: '.72rem', color: 'var(--txt3)', background: 'none', border: 'none', cursor: 'pointer' }}>
+                  Reset
+                </button>
+              </div>
+              {filteredQ.length > 0 && (
+                <div className="quiz-body">
+                  <div className="quiz-counter">Question {qIdx + 1} of {filteredQ.length}</div>
+                  <div className="quiz-q">{filteredQ[qIdx].q}</div>
+                  {showAns && (
+                    <div className="quiz-answer anim-up">
+                      <div className="qa-label">✅ MODEL ANSWER</div>
+                      <div className="qa-text">{filteredQ[qIdx].a}</div>
+                    </div>
+                  )}
+                  <div className="quiz-btns">
+                    {!showAns ? (
+                      <button className="qb qb-show" onClick={() => setShowAns(true)}>Reveal Answer</button>
+                    ) : (
+                      <>
+                        <button className="qb qb-ok"
+                          onClick={() => { setScore(s => ({ ...s, c: s.c + 1 })); setQIdx(q => (q + 1) % filteredQ.length); setShowAns(false); }}>
+                          ✅ Got it
+                        </button>
+                        <button className="qb qb-no"
+                          onClick={() => { setScore(s => ({ ...s, w: s.w + 1 })); setQIdx(q => (q + 1) % filteredQ.length); setShowAns(false); }}>
+                          ❌ Missed it
+                        </button>
+                      </>
+                    )}
+                    <button className="qb qb-rand"
+                      onClick={() => { setQIdx(Math.floor(Math.random() * filteredQ.length)); setShowAns(false); }}>
+                      🎲
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="anim-up">
+            <div className="content-card">
+              <div className="card-header"
+                style={{ background: `linear-gradient(135deg,${unit.color}20,${unit.color}06)`, borderBottom: `1px solid ${unit.color}30` }}>
+                <div className="card-header-label">
+                  <span>{unit.emoji}</span>
+                  <span>{unit.title} — {unit.subtitle}</span>
+                  <span style={{ marginLeft: 'auto', background: unit.color + '22', color: unit.color, padding: '2px 10px', borderRadius: 99, fontSize: '.68rem', fontWeight: 700 }}>
+                    {selTopic + 1} / {unit.topics.length}
+                  </span>
+                </div>
                 <h2 style={{ color: unit.color }}>{topic.title}</h2>
               </div>
-
-              <div className="content-body">
-                {renderContent(topic.content)}
+              <div className="card-body">
+                {topic.content.map((item, i) => (
+                  <RenderItem key={i} item={item} color={unit.color} />
+                ))}
               </div>
-
               <div className="content-nav">
-                <button className="nav-btn nav-btn-prev" onClick={prevTopic}
-                  disabled={selUnit===0 && selTopic===0}>
-                  ← Previous
-                </button>
-                <span className="nav-counter">{selTopic+1} / {unit.topics.length}</span>
-                <button className="nav-btn nav-btn-next" onClick={nextTopic}
-                  style={{ background: unit.color }}
-                  disabled={selUnit===units.length-1 && selTopic===unit.topics.length-1}>
+                <button className="nav-btn nav-btn-prev" onClick={prevTopic} disabled={isFirst}>← Previous</button>
+                <div className="nav-pos">
+                  <div style={{ fontWeight: 600, fontSize: '.8rem', color: unit.color }}>{unit.title}</div>
+                  <div style={{ fontSize: '.72rem', color: 'var(--txt3)', marginTop: 2 }}>Topic {selTopic + 1} of {unit.topics.length}</div>
+                </div>
+                <button className="nav-btn nav-btn-next" onClick={nextTopic} disabled={isLast}
+                  style={{ background: unit.color }}>
                   Next →
                 </button>
               </div>
             </div>
-          )}
-        </main>
-      </div>
+          </div>
+        )}
+      </main>
     </div>
   );
 }
